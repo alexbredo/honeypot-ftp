@@ -149,8 +149,8 @@ class SimpleFtpProtocol(FTP):
 
 try:
 	factory = FTPFactory(
-		Portal(MyFTPRealm(config.pubdir)), 
-		[FilePasswordDB(config.passwdfile)]
+		Portal(MyFTPRealm(config.pubdir), 
+		[FilePasswordDB(config.passwdfile)])
 	)
 	factory.protocol = SimpleFtpProtocol
 	reactor.listenTCP(config.port, factory)
