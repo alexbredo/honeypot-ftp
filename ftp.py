@@ -1,7 +1,7 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# Copyright (c) 2014 Alexander Bredo
+# Copyright (c) 2014 Alexander Bredo, 2024 James Brine
 # All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or 
@@ -32,138 +32,143 @@
 # OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
 # POSSIBILITY OF SUCH DAMAGE.
 
-
-'''
-TODO:
- - Implement new mode for persisting data AND scan for malware.
-'''
-
-import time, uuid
+import time, uuid, logging, argparse
 from twisted.python import filepath
 from twisted.protocols.ftp import FTPFactory, FTPRealm, FTP
 from twisted.cred.portal import Portal
 from twisted.cred.checkers import FilePasswordDB
 from twisted.internet import reactor, ssl
+from elasticsearch import Elasticsearch
 
-from base.applog import *
-from base.appconfig import Configuration
-from handler.manager import HandlerManager
+# Argument parsing
+parser = argparse.ArgumentParser(description='FTP Honeypot')
+parser.add_argument('--log', choices=['screen', 'file', 'elasticsearch'], default='screen', help='Logging type')
+parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
+args = parser.parse_args()
 
-class FTPConfig(Configuration):
-	def setup(self, *args, **kwargs): # Defaults: 
-		self.__version = '0.1.0'
-		self.__appname = 'honeypot_ftp'
-		self.port=21
-		self.sslport=990
-		self.pubdir='pub/'
-		self.passwdfile='passwd'
-		self.sslcertprivate='keys/smtp.private.key'
-		self.sslcertpublic='keys/smtp.public.key'
-		self.enabled_handlers = {
-			'elasticsearch': True, 
-			'screen': True,
-			'file': True
-		}
-		self.elasticsearch = {
-			'host': '127.0.0.1', 
-			'port': 9200, 
-			'index': 'honeypot'
-		}
-		self.filename = 'honeypot_output.txt'
-		
+# Configure logging
+log_level = logging.DEBUG if args.verbose else logging.INFO
+logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+if args.log == 'file':
+    file_handler = logging.FileHandler('honeypot_output.txt')
+    logger.addHandler(file_handler)
+elif args.log == 'elasticsearch':
+    es_host = '127.0.0.1'
+    es_port = 9200
+    es = Elasticsearch([{'host': es_host, 'port': es_port}])
+class FTPConfig:
+    def __init__(self):
+        self.version = '0.1.0'
+        self.appname = 'honeypot_ftp'
+        self.port = 2121
+        self.sslport = 990
+        self.pubdir = 'pub/'
+        self.passwdfile = 'passwd'
+        self.sslcertprivate = 'keys/smtp.private.key'
+        self.sslcertpublic = 'keys/smtp.public.key'
+        self.enabled_handlers = {
+            'elasticsearch': True, 
+            'screen': True,
+            'file': True
+        }
+        self.elasticsearch = {
+            'host': '127.0.0.1', 
+            'port': 9200, 
+            'index': 'honeypot'
+        }
+        self.filename = 'honeypot_output.txt'
+
 config = FTPConfig()
-handler = HandlerManager(config)
 
 class MyFTPRealm(FTPRealm):
-	def __init__(self, dir):
-		self.userHome = filepath.FilePath(dir)
+    def __init__(self, dir):
+        self.userHome = filepath.FilePath(dir)
 
-	def getHomeDirectory(self, avatarId):
-		return self.userHome # Hack: Igmore Users Directory
+    def getHomeDirectory(self, avatarId):
+        return self.userHome
 
 class SimpleFtpProtocol(FTP):
-	def __init__(self):
-		self.session = str(uuid.uuid1()) # Now Dirty. Stateful. Multiple concurrent sessions not possible. (TODO: Memorise Stateful Data per Socket)
-		self.myownhost = None
+    def __init__(self):
+        super().__init__()
+        self.session = str(uuid.uuid1())
+        self.myownhost = None
 
-	def connectionMade(self):
-		self.__logInfo('connected', '', True)
-		FTP.connectionMade(self)
+    def connectionMade(self):
+        self.__logInfo('connected', '', True)
+        super().connectionMade()
 
-	def connectionLost(self, reason):
-		self.__logInfo('disconnected', '', True)
-		FTP.connectionLost(self, reason)
+    def connectionLost(self, reason):
+        self.__logInfo('disconnected', '', True)
+        super().connectionLost(reason)
 
-	def lineReceived(self, line):
-		self.__logInfo('command', line, True)
-		FTP.lineReceived(self, line)
+    def lineReceived(self, line):
+        self.__logInfo('command', line, True)
+        super().lineReceived(line)
 
-	# BEGINN HACKS: Do not write anything to disk (Remove Functionality)
+    def ftp_STOR(self, path):
+        self.sendLine('125 Data connection already open, starting transfer')
+        self.sendLine('226 Transfer Complete.')
 
-	def ftp_STOR(self, path):
-		FTP.sendLine(self, '125 Data connection already open, starting transfer')
-		FTP.sendLine(self, '226 Transfer Complete.')
+    def ftp_DELE(self, path):
+        self.sendLine('250 Requested File Action Completed OK')
 
-	def ftp_DELE(self, path):
-		FTP.sendLine(self, '250 Requested File Action Completed OK')
+    def ftp_RNFR(self, fromName):
+        self.sendLine('350 Requested file action pending further information.')
 
-	def ftp_RNFR(self, fromName):
-		FTP.sendLine(self, '350 Requested file action pending further information.')
+    def ftp_RNTO(self, toName):
+        self.sendLine('250 Requested File Action Completed OK')
 
-	def ftp_RNTO(self, toName):
-		FTP.sendLine(self, '250 Requested File Action Completed OK')
+    def ftp_MKD(self, path):
+        self.sendLine('257 Folder created')
 
-	def ftp_MKD(self, path):
-		FTP.sendLine(self, '257 Folder created')
+    def ftp_RMD(self, path):
+        self.sendLine('250 Requested File Action Completed OK')
 
-	def ftp_RMD(self, path):
-		FTP.sendLine(self, '250 Requested File Action Completed OK')
-		
-#	def sendLine(self, msg):
-#		print " --> " + msg
-#		return FTP.sendLine(self, msg)
+    def __logInfo(self, type, command, successful):
+        try:
+            self.myownhost = self.transport.getHost()
+        except AttributeError:
+            pass
 
-	# END HACKS
-
-	def __logInfo(self, type, command, successful):
-		try: # Hack: On Connection-Close socket unavailable. remember old ip.
-			self.myownhost = self.transport.getHost()
-		except AttributeError:
-			pass # nothing
-
-		data = {
-			'module': 'FTP', 
-			'@timestamp': int(time.time() * 1000), # in milliseconds
-			'sourceIPv4Address': str(self.transport.getPeer().host), 
-			'sourceTransportPort': self.transport.getPeer().port,
-			'type': type,
-			'command': command, 
-			'success': successful, 
-			'session': self.session
-		}
-		if self.myownhost:
-			data['destinationIPv4Address'] = str(self.myownhost.host)
-			data['destinationTransportPort'] = self.myownhost.port
-
-		handler.handle(data)
+        data = {
+            'module': 'FTP', 
+            '@timestamp': int(time.time() * 1000),
+            'sourceIPv4Address': str(self.transport.getPeer().host), 
+            'sourceTransportPort': self.transport.getPeer().port,
+            'type': type,
+            'command': command, 
+            'success': successful, 
+            'session': self.session
+        }
+        if self.myownhost:
+            data['destinationIPv4Address'] = str(self.myownhost.host)
+            data['destinationTransportPort'] = self.myownhost.port
+        if args.log == 'screen' or args.log == 'file':
+            logger.info(f"FTP Event: {data}")
+        elif args.log == 'elasticsearch':
+            es.index(index="honeypot", doc_type="event", body=data)
 
 try:
-	factory = FTPFactory(
-		Portal(MyFTPRealm(config.pubdir)), 
-		[FilePasswordDB(config.passwdfile)]
-	)
-	factory.protocol = SimpleFtpProtocol
-	reactor.listenTCP(config.port, factory)
-	reactor.listenSSL(
-		config.sslport, 
-		factory, 
-		ssl.DefaultOpenSSLContextFactory(
-			config.sslcertprivate, 
-			config.sslcertpublic
-	))
-	log.info('Server listening on Port %s (Plain) and on %s (SSL).' % (config.port, config.sslport))
-	reactor.run()
+    factory = FTPFactory(
+        Portal(MyFTPRealm(config.pubdir)), 
+        [FilePasswordDB(config.passwdfile)]
+    )
+    factory.protocol = SimpleFtpProtocol
+    reactor.listenTCP(config.port, factory)
+    if args.log == 'elasticsearch':
+        reactor.listenSSL(
+            config.sslport, 
+            factory, 
+            ssl.DefaultOpenSSLContextFactory(
+                config.sslcertprivate, 
+                config.sslcertpublic
+            ))
+    logger.info(f'Server listening on Port {config.port} (Plain) and on {config.sslport} (SSL).')
+    reactor.run()
 except Exception as e:
-	log.error(str(e));
-	exit(-1)
-log.info('Server shutdown.')
+    logger.error(str(e))
+    exit(-1)
+
+logger.info('Server shutdown.')
