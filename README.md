@@ -1,7 +1,8 @@
-honeypot-ftp
+honeypot-ftp-python3
 ============
 
-FTP Honeypot
+Adapted from https://github.com/alexbredo/honeypot-ftp FTP Honeypot by Alexander Bredo.
+Minor changes to allow for more lightweight logging, elasticsearch support and command line flags including a more verbose output.
 
 Features:
  * FTP + SSL-FTP
@@ -15,14 +16,9 @@ Dependencies:
 
 Usage:
 ```bash
-# Generate Config
-python ftp.py -d config.xml
 # Run
-python ftp.py
+python3 ftp.py -help
 ```
-
-TODO: 
- * retain and analyse Files (Hash, Clam, Virustotal, ...)
  
 Contribution welcome.
 
@@ -47,4 +43,4 @@ OpenSSL.SSL.Error: [('system library', 'fopen', 'No such process'), ('BIO routin
  --> Certifcate Files not found (wrong path?)
 
 All rights reserved.
-(c) 2014 by Alexander Bredo
+(c) 2014 by Alexander Bredo, 2024 James Brine
